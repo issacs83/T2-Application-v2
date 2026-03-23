@@ -7,7 +7,10 @@
  * It is the only App-layer file that directly references both
  * Port and legacy src/ modules.
  *
- * Memory: ~1200 bytes Flash, ~16 bytes SRAM.
+ * App_Run() is the non-blocking main loop. Every function called
+ * from App_Run() must return within ~100us. No blocking waits.
+ *
+ * Memory: ~1400 bytes Flash, ~20 bytes SRAM.
  */
 
 /* System / legacy headers */
@@ -65,11 +68,68 @@ extern bool CAN_Collimator_SendMessage(uint16_t cmd, uint32_t value,
 /* Private variables                                                  */
 /* ================================================================== */
 
-static bool g_boot_gen_ok;
-static bool g_boot_col_ok;
-static bool g_boot_mot_ok;
+/* Boot status flags - accessed by state_machine.c for idle LED */
+bool g_boot_gen_ok;
+bool g_boot_col_ok;
+bool g_boot_mot_ok;
 
 #define UART_MEMBRANELIVE_SIGNAL_SEND   "[SP_MEMB_SIGN_]"
+
+/* ================================================================== */
+/* CAN message processing (non-blocking)                               */
+/* ================================================================== */
+static void app_process_can(void)
+{
+    if (g_can_rx_flag) {
+        __disable_irq();
+        CAN_RxMessage = g_can_rx_msg;
+        g_can_rx_flag = 0;
+        __enable_irq();
+        CAN_ParseMessage();
+    }
+}
+
+/* ================================================================== */
+/* Mode change detection                                               */
+/* Bridges legacy CurCaptureMode writes (from UART command parser)     */
+/* into state machine events.                                          */
+/* ================================================================== */
+static volatile OpStatus_t g_prev_capture_mode = CAPTURE_CANCEL;
+
+static void app_check_mode_change(void)
+{
+    OpStatus_t cur = CurCaptureMode;
+
+    if (cur == g_prev_capture_mode) {
+        return;
+    }
+
+    /* Only post mode events when state machine is idle */
+    if (StateMachine_GetState() != ST_IDLE) {
+        /* If a cancel was requested, post cancel event */
+        if (cur == CAPTURE_CANCEL || cur == RESET_MODE) {
+            StateMachine_PostEvent(EVT_CANCEL);
+        }
+        g_prev_capture_mode = cur;
+        return;
+    }
+
+    switch (cur) {
+    case CAPTURE_PANO:      StateMachine_PostEvent(EVT_MODE_PANO);        break;
+    case CAPTURE_CT:        StateMachine_PostEvent(EVT_MODE_CT);          break;
+    case CAPTURE_SCAN:      StateMachine_PostEvent(EVT_MODE_SCAN);        break;
+    case CALIBRATION_MODE:  StateMachine_PostEvent(EVT_MODE_CALIBRATION); break;
+    case GEOMETRY_ALIGN_MODE: StateMachine_PostEvent(EVT_MODE_GEO_ALIGN); break;
+    case EEPROM_MODE:       StateMachine_PostEvent(EVT_MODE_EEPROM);      break;
+    case DIAGNOSTIC_MODE:   StateMachine_PostEvent(EVT_MODE_DIAGNOSTIC);  break;
+    case RESET_MODE:        StateMachine_PostEvent(EVT_MODE_RESET);       break;
+    case CAPTURE_CANCEL:
+    default:
+        break;
+    }
+
+    g_prev_capture_mode = cur;
+}
 
 /* ================================================================== */
 /* App_Init                                                           */
@@ -81,14 +141,11 @@ void App_Init(void)
      * Step 1: Core system initialization.
      * System_Init() configures clocks, GPIO, UART, CAN, timers,
      * sensors, tube, EEPROM, emergency switch, motors.
-     * This is the existing monolithic init from system.c.
      */
     System_Init();
 
     /*
      * Step 2: Initialize new architecture modules.
-     * These must come after System_Init() because they depend on
-     * peripheral clocks and GPIO being configured.
      */
     DbgLog_Init();
     MotorCtrl_Init();
@@ -155,7 +212,7 @@ void App_Init(void)
     /* Short delay for boot completion */
     IntTimer_Delay(600);
     while (!IntTimer_GetStatus()) {
-        /* wait */
+        /* wait - acceptable during boot only */
     }
 
     /* Clear first-capture flags */
@@ -167,157 +224,48 @@ void App_Init(void)
 
     /* Initialize state machine */
     StateMachine_Init();
+
+    /* Sync mode tracking */
+    g_prev_capture_mode = CurCaptureMode;
 }
 
 /* ================================================================== */
-/* App_Run                                                            */
+/* App_Run : Non-blocking main loop                                    */
 /* ================================================================== */
 
 void App_Run(void)
 {
     while (1) {
         /*
-         * Main dispatch: route to the active capture/mode handler.
-         * Uses the legacy CurCaptureMode global for backward
-         * compatibility with existing capture modules.
-         */
-        switch (CurCaptureMode) {
-        case CAPTURE_PANO:
-            PanoSequence_Run();
-            break;
-
-        case CAPTURE_CT:
-            CtSequence_Run();
-            break;
-
-        case CAPTURE_SCAN:
-            ScanSequence_Run();
-            break;
-
-        case CALIBRATION_MODE:
-            AppCalibration_Run();
-            break;
-
-        case GEOMETRY_ALIGN_MODE:
-            AppGeoAlign_Run();
-            break;
-
-#ifdef USE_I2C_EEPROM
-        case EEPROM_MODE:
-            EEPRom_ModeLoop();
-            break;
-#endif
-
-        case DIAGNOSTIC_MODE:
-            DiagnosticMode();
-            break;
-
-        case RESET_MODE:
-            /* Turn off all lasers and exposure LED */
-            LaserControl(TYPE_HEAD_CEPH, RESET);
-            LaserControl(TYPE_HEAD_PANO, RESET);
-            LaserControl(TYPE_FOOT, RESET);
-            Exposure_CtrlLed(EXPOSURE_LED_GPIO_DISABLE);
-            UART_SendMessage(DBG_MSG_PC, "[SP_MODE_RESET]");
-#ifdef USE_TABLET_PC
-            UART_SendMessage(DBG_MSG_TABLET, "[SP_MODE_RESET]");
-#endif
-
-            /* Handle tilt-off for ceph model */
-            if ((sysInfo.model_id == MODEL_T2_CS) && (g_bTiltStatus == SET)) {
-                if (!CAN_Collimator_SendMessage(CMD_TILT_OFF, 0, 0, 5000, 2)) {
-                    printUart(DBG_MSG_PC, "Titing Error");
-                }
-                g_bTiltStatus = RESET;
-            }
-
-            Motor_MoveInitPosition();
-
-#ifdef USE_TABLET_PC
-            UART_SendMessage(DBG_MSG_TABLET, "[SP_CAPT_CANCE]");
-#endif
-            CurCaptureMode = CAPTURE_CANCEL;
-            break;
-
-        case CAPTURE_CANCEL:
-        default:
-            /* Handle boot error LED indicators */
-            if (!g_boot_gen_ok || !g_boot_col_ok || !g_boot_mot_ok) {
-                if (!g_boot_mot_ok) {
-                    while (!LampTimer_GetStatus()) { }
-                    Motor_Lamp_ErrorStatus();
-                }
-                if (!g_boot_gen_ok) {
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(4, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(5, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(4, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(5, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(0, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(5, 2);
-                }
-                if (!g_boot_col_ok) {
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(4, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(5, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(0, 10);
-                    while (!LampTimer_GetStatus()) { }
-                    LampErrorTimer_Enable(5, 2);
-                }
-            } else if (IntTimer.bLampEnable == SET) {
-                Exposure_CtrlLed(EXPOSURE_LED_GPIO_DISABLE);
-                while (!LampTimer_GetStatus()) { }
-            }
-
-#ifdef USE_AGING_MODE
-#define AGING_INTERVAL_TIME     30000
-            if ((g_bAgingMode == SET) && (PrevCaptureMode != CAPTURE_CANCEL)) {
-                if (PrevCaptureMode == CAPTURE_PANO) {
-                    CurCaptureMode = CAPTURE_CT;
-                } else if (PrevCaptureMode == CAPTURE_CT) {
-                    CurCaptureMode = CAPTURE_SCAN;
-                } else if (PrevCaptureMode == CAPTURE_SCAN) {
-                    Column_Control(COLUMN_DOWN);
-                    IntTimer_Delay(AGING_INTERVAL_TIME);
-                    while (!IntTimer_GetStatus()) { }
-                    Column_Control(COLUMN_STOP);
-                    Column_Control(COLUMN_UP);
-                    IntTimer_Delay(AGING_INTERVAL_TIME);
-                    while (!IntTimer_GetStatus()) { }
-                    Column_Control(COLUMN_STOP);
-                    if (g_bAgingMode == SET) {
-                        CurCaptureMode = CAPTURE_PANO;
-                    }
-                }
-            }
-#endif /* USE_AGING_MODE */
-            break;
-        }
-
-        /*
-         * CAN message processing (flag set by CAN2_RX0_IRQHandler).
-         * Copy message under IRQ disable to prevent ISR overwriting buffer
-         * if a second CAN frame arrives during processing.
-         */
-        if (g_can_rx_flag) {
-            __disable_irq();
-            CAN_RxMessage = g_can_rx_msg;
-            g_can_rx_flag = 0;
-            __enable_irq();
-            CAN_ParseMessage();
-        }
-
-        /*
-         * Safety checks and debug log flush every main loop iteration.
+         * 1. Safety: watchdog kick + emergency check.
+         *    Must be first to ensure watchdog is fed even if
+         *    other subsystems are slow.
          */
         Safety_CheckMainLoop();
+
+        /*
+         * 2. CAN message processing.
+         *    Copies ISR-received message and parses it.
+         */
+        app_process_can();
+
+        /*
+         * 3. Mode change detection.
+         *    Bridges legacy CurCaptureMode writes into SM events.
+         */
+        app_check_mode_change();
+
+        /*
+         * 4. State machine dispatch.
+         *    Processes one event and runs the active state handler.
+         *    Every handler returns within ~100us.
+         */
+        StateMachine_Run();
+
+        /*
+         * 5. Debug log flush.
+         *    Sends buffered debug messages to UART.
+         */
         DbgLog_Flush();
     }
 }

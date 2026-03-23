@@ -7,17 +7,17 @@
  *
  * App_Init() performs:
  *   1. System peripheral initialization (System_Init)
- *   2. Port layer initialization (serial, CAN, motor, sensors, GPIO)
- *   3. Domain module initialization (debug log)
- *   4. Safety subsystem initialization (IWDG, emergency)
- *   5. EEPROM configuration loading
- *   6. Generator + Collimator + Motor boot checks
+ *   2. Debug log + motor controller + safety init
+ *   3. EEPROM configuration loading
+ *   4. Generator + Collimator + Motor boot checks
+ *   5. State machine initialization
  *
- * App_Run() is the main super-loop:
- *   1. Dispatch to current capture mode handler
- *   2. Process CAN messages
- *   3. Safety checks + watchdog kick
- *   4. Debug log flush
+ * App_Run() is the non-blocking main super-loop:
+ *   1. Safety_CheckMainLoop (watchdog + emergency)
+ *   2. CAN message processing
+ *   3. Mode change detection (CurCaptureMode -> SM events)
+ *   4. StateMachine_Run (non-blocking dispatch)
+ *   5. DbgLog_Flush
  */
 
 #ifndef APP_MAIN_H
@@ -31,6 +31,7 @@ void App_Init(void);
 
 /**
  * Main application super-loop. Never returns.
+ * Every function called from App_Run() is non-blocking.
  */
 void App_Run(void);
 
