@@ -1,0 +1,28 @@
+# Build artifacts
+Debug/
+Release/
+*.o
+*.d
+*.su
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.srec
+*.symbolsrec
+*.verilog
+
+# IDE
+.settings/
+.cproject
+.project
+*.launch
+*.log
+*.zip
+
+# Backup files
+*.bak
+
+# SCB_CMSIS_S (Source Insight project)
+SCB_CMSIS_S/
