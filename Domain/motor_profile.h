@@ -1,5 +1,5 @@
 /*
- * motor_profile.h : Motion profile generation (pure math, no hardware)
+ * motor_profile.h : Buffer-based motion profile generation (pure math, no HW)
  *
  * Copyright (C) 2016-2026 Osstem Implant, Inc
  *
@@ -8,6 +8,15 @@
  * buffers only.
  *
  * Fixed-point Q16.16 arithmetic for profile building (no floating point).
+ *
+ * Relationship with motion_profile.h:
+ *   - motor_profile:  BUFFER-BASED, pre-computes all CCR values into an array.
+ *                     Simple ISR (just reads buf[idx++]). Uses more SRAM.
+ *   - motion_profile: STATE-MACHINE-BASED, computes CCR on-the-fly per ISR tick.
+ *                     Adds S-curve, arch interpolation, homing. Uses ~64 bytes.
+ *   Both modules are valid and can coexist. Use motor_profile for legacy
+ *   compatibility with existing pre-computed arch tables. Use motion_profile
+ *   for new S-curve motions and memory-constrained configurations.
  *
  * Memory: ~400 bytes Flash, 0 bytes SRAM.
  */

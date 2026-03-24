@@ -1,7 +1,9 @@
 /*
- * motor_profile.c : Motion profile generation (pure math)
+ * motor_profile.c : Buffer-based motion profile generation (pure math)
  *
  * Copyright (C) 2016-2026 Osstem Implant, Inc
+ *
+ * See motor_profile.h for relationship with motion_profile module.
  *
  * Memory: ~500 bytes Flash, 0 bytes SRAM.
  */
