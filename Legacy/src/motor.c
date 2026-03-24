@@ -707,7 +707,7 @@ static void SPI_Initialize(void)
 	SPI_InitStructure.SPI_CPOL = SPI_CPOL_High;
 	SPI_InitStructure.SPI_CPHA = SPI_CPHA_2Edge;
 	SPI_InitStructure.SPI_NSS = SPI_NSS_Soft;
-	SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_8;
+	SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_16; /* TMC2660 max 4MHz, APB1=60MHz/16=3.75MHz */
 	SPI_InitStructure.SPI_FirstBit = SPI_FirstBit_MSB;
 	SPI_InitStructure.SPI_CRCPolynomial = 7;
 	SPI_Init(SPI3, &SPI_InitStructure);
@@ -802,11 +802,11 @@ static void TMC2660_SPI_SendData(GPIO_TypeDef *pGpio, uint16_t gpio_pin, uint32_
 			Received_byte = Received & 0x00004;	
 			Received_byte>>=2;
 			if(Received_byte == SET)
-				printUart(DBG_MSG_PC, "%s $%05x OverTemperture Warning (100��C)",string,Received);
+				printUart(DBG_MSG_PC, "%s $%05x OverTemperture Warning (100��C)",string,Received);
 			Received_byte = Received & 0x00002;
 			Received_byte>>=1;
 			if(Received_byte == SET)
-				printUart(DBG_MSG_PC, "%s $%05x OverTemperture ShotDown (150��C)",string,Received);
+				printUart(DBG_MSG_PC, "%s $%05x OverTemperture ShotDown (150��C)",string,Received);
 			Received_byte = Received & 0x00001;
 			if(Received_byte == SET)
 				printUart(DBG_MSG_PC, "%s $%05x StallGaurd 2",string,Received);
@@ -829,7 +829,7 @@ void TMC2660_SPI_ReadData(Motor_Typedef* Mot)
 	}
 	else if(Mot == &Motor_C)
 	{
-		TMC2660_SPI_SendData(ROT_SPI_CS_GPIO, ROT_SPI_CS_GPIO_PIN, 0x00000);
+		TMC2660_SPI_SendData(CS_SPI_CS_GPIO, CS_SPI_CS_GPIO_PIN, 0x00000); /* Fix: was ROT (Motor_R) CS pin */
 	}
 	else if(Mot == &Motor_S)
 	{
@@ -2697,7 +2697,7 @@ void Motor_Start(Motor_Typedef* motor)
 	}
 
     //jehun - 20200720
-    // CNS Stitching ������ ���ܵ�, ������ ���� I/O�����?�ʿ� ����
+    // CNS Stitching ������ ���ܵ�, ������ ���� I/O�����?�ʿ� ����
     if(motor == &Motor_CNS){
     	switch(motor->Timer.Channel) {
     	case TIM_Channel_1:
@@ -4423,9 +4423,9 @@ bool Motor_MoveInitPosition(void)
 
         Motor_RunOrgCheck(&Motor_R);
         Motor_RunOrgCheck(&Motor_V);
-        // 촬영 종료 ??org�??�동 추�?
-        // Ceph 촬영 종료 ??current step??2배로 ?�어 ?�음
-        // ceph 촬영 ??2�?colli??resolution??2배로 ?�정??
+        // 촬영 종료 ??org�??�동 추�?
+        // Ceph 촬영 종료 ??current step??2배로 ?�어 ?�음
+        // ceph 촬영 ??2�?colli??resolution??2배로 ?�정??
         if (sysInfo.model_id == MODEL_T2_CS)
 		{
             Motor_RunOrgCheck(&Motor_C);

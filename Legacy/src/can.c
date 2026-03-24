@@ -235,7 +235,7 @@ void CAN_Config(void)
 	
 	/* CAN cell init */
 	CAN_InitStructure.CAN_TTCM = DISABLE;
-	CAN_InitStructure.CAN_ABOM = DISABLE;
+	CAN_InitStructure.CAN_ABOM = ENABLE; /* Auto bus-off recovery for reliability */
 	CAN_InitStructure.CAN_AWUM = DISABLE;
 	CAN_InitStructure.CAN_NART = DISABLE;
 	CAN_InitStructure.CAN_RFLM = DISABLE;
